@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
+import 'settings_view.dart';
 
 // MARK: - Main App Initialization
 void main() {
@@ -173,13 +174,15 @@ class BuoyViewModel extends ChangeNotifier {
   List<BuoyObservation> get buoyObservations => _buoyObservations;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
+  String get buoyStation => _buoyStation;
+  String get tideStation => _tideStation;
 
   // Getter for the most recent observation.
   BuoyObservation? get latestObservation => _buoyObservations.isNotEmpty ? _buoyObservations.first : null;
 
   // Station IDs
-  final String _buoyStation = "44013"; // Boston Buoy
-  final String _tideStation = "8443970"; // Boston Harbor
+  String _buoyStation = "44013"; // Boston Buoy
+  String _tideStation = "8443970"; // Boston Harbor
   final NOAAService _noaaService = NOAAService();
 
   BuoyViewModel() {
@@ -208,6 +211,13 @@ class BuoyViewModel extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  Future<void> updateStations({required String buoyStation, required String tideStation}) async {
+    _buoyStation = buoyStation;
+    _tideStation = tideStation;
+    // When stations are updated, we must fetch new data.
+    await fetchData();
+  }
 }
 
 
@@ -216,13 +226,42 @@ class BuoyViewModel extends ChangeNotifier {
 class ContentView extends StatelessWidget {
   const ContentView({super.key});
 
+  // Method to navigate to the settings page.
+  void _navigateToSettings(BuildContext context) async {
+    final viewModel = context.read<BuoyViewModel>();
+    // Await the result from the SettingsView.
+    final newStations = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SettingsView(
+          currentBuoyStation: viewModel.buoyStation,
+          currentTideStation: viewModel.tideStation,
+        ),
+      ),
+    );
+
+    // If the user saved new stations, update the view model.
+    if (newStations != null && newStations is Map<String, String>) {
+      await viewModel.updateStations(
+        buoyStation: newStations['buoyStation']!,
+        tideStation: newStations['tideStation']!,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Consumer widget listens to changes in BuoyViewModel and rebuilds the UI.
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Boston Buoy (44013)"),
+        title: Consumer<BuoyViewModel>(
+          builder: (context, viewModel, child) => Text("Buoy (${viewModel.buoyStation})"),
+        ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () => _navigateToSettings(context),
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
@@ -325,6 +364,7 @@ class TideInformationView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final viewModel = context.watch<BuoyViewModel>();
     // Parse predictions into chart spots.
     final spots = predictions
         .where((p) => p.v.isNotEmpty && double.tryParse(p.v) != null)
@@ -346,7 +386,7 @@ class TideInformationView extends StatelessWidget {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text("Today's Tides (Boston Harbor)", style: Theme.of(context).textTheme.titleLarge),
+          Text("Today's Tides (${viewModel.tideStation})", style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 10),
           Card(
             elevation: 2,
@@ -367,7 +407,7 @@ class TideInformationView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text("Today's Tides (Boston Harbor)", style: Theme.of(context).textTheme.titleLarge),
+        Text("Today's Tides (${viewModel.tideStation})", style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 10),
         Card(
           elevation: 2,
