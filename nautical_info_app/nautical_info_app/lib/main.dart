@@ -144,7 +144,7 @@ class NOAAService {
         // Parse values, handling "MM" for missing data.
         final waveHeight = double.tryParse(values[colIndices['WVHT']!]);
         final airTemp = double.tryParse(values[colIndices['ATMP']!]);
-        
+
         observations.add(BuoyObservation(
           time: time,
           waveHeight: waveHeight,
@@ -197,7 +197,7 @@ class BuoyViewModel extends ChangeNotifier {
         _noaaService.fetchTideData(_tideStation),
         _noaaService.fetchBuoyData(_buoyStation), // Updated call.
       ]);
-      
+
       _tidePredictions = results[0] as List<TidePrediction>;
       _buoyObservations = results[1] as List<BuoyObservation>;
 
@@ -323,43 +323,102 @@ class TideInformationView extends StatelessWidget {
 
   const TideInformationView({super.key, required this.predictions});
 
-  // Helper to format the time string from the API.
-  String _formatTime(String dateString) {
-    try {
-      if (dateString.isEmpty) return 'N/A';
-      final dateTime = DateTime.parse(dateString);
-      return DateFormat.jm().format(dateTime.toLocal()); // e.g., 5:08 PM
-    } catch (e) {
-      return dateString; // Fallback
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    // Parse predictions into chart spots.
+    final spots = predictions
+        .where((p) => p.v.isNotEmpty && double.tryParse(p.v) != null)
+        .map((p) {
+          try {
+            final dateTime = DateTime.parse(p.t);
+            final value = double.parse(p.v);
+            return FlSpot(dateTime.millisecondsSinceEpoch.toDouble(), value);
+          } catch (e) {
+            // Return null for spots that can't be parsed, and filter them out.
+            return null;
+          }
+        })
+        .where((spot) => spot != null)
+        .cast<FlSpot>()
+        .toList();
+
+    if (spots.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("Today's Tides (Boston Harbor)", style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 10),
+          Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            child: const SizedBox(
+              height: 250,
+              child: Center(child: Text("No tide data available.")),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Find the min and max time for chart boundaries.
+    final minTime = spots.map((e) => e.x).reduce((a, b) => a < b ? a : b);
+    final maxTime = spots.map((e) => e.x).reduce((a, b) => a > b ? a : b);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text("Today's Tides (Boston Harbor)", style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 10),
         Card(
-           elevation: 2,
-           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-           child: Padding(
-             padding: const EdgeInsets.all(8.0),
-             child: Column(
-              children: predictions.map((p) {
-                final isHighTide = p.type == "H";
-                return ListTile(
-                  leading: Icon(
-                    isHighTide ? Icons.arrow_upward : Icons.arrow_downward,
-                    color: isHighTide ? Colors.blue : Colors.green,
+          elevation: 2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+            child: SizedBox(
+              height: 250,
+              child: LineChart(
+                LineChartData(
+                  gridData: const FlGridData(show: true),
+                  titlesData: FlTitlesData(
+                    leftTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: true, reservedSize: 40),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 30,
+                        interval: (maxTime - minTime) / 4, // Dynamic interval
+                        getTitlesWidget: (value, meta) {
+                          final date = DateTime.fromMillisecondsSinceEpoch(value.toInt()).toLocal();
+                          return SideTitleWidget(
+                            axisSide: meta.axisSide,
+                            child: Text(DateFormat.j().format(date)), // e.g., 5 PM
+                          );
+                        },
+                      ),
+                    ),
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                   ),
-                  title: Text("${isHighTide ? 'High' : 'Low'}: ${_formatTime(p.t)}"),
-                  trailing: Text("${p.v} ft", style: const TextStyle(fontWeight: FontWeight.bold)),
-                );
-              }).toList(),
+                  borderData: FlBorderData(show: true, border: Border.all(color: const Color(0xff37434d), width: 1)),
+                  lineBarsData: [
+                    LineChartBarData(
+                      spots: spots,
+                      isCurved: true,
+                      color: Colors.green,
+                      barWidth: 3,
+                      isStrokeCapRound: true,
+                      dotData: const FlDotData(show: true),
+                      belowBarData: BarAreaData(
+                        show: true,
+                        color: Colors.green.withOpacity(0.3),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-           ),
+          ),
         ),
       ],
     );
@@ -373,9 +432,11 @@ class WaveChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final twentyFourHoursAgo = DateTime.now().subtract(const Duration(hours: 24));
+
     // Convert our observation data into chart spots.
     final spots = buoyObservations
-      .where((obs) => obs.waveHeight != null) // Filter out entries with no wave height data
+      .where((obs) => obs.waveHeight != null && obs.time.isAfter(twentyFourHoursAgo)) // Filter for last 24 hours
       .map((obs) {
         // Data is newest first, so we reverse it for a chronological chart.
         return FlSpot(obs.time.millisecondsSinceEpoch.toDouble(), obs.waveHeight!);
